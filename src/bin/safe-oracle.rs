@@ -96,5 +96,3 @@ fn main() {
     );
     println!("CREATE2 Address: {}", create2_address);
 }
-
-

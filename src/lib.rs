@@ -3,6 +3,151 @@ use alloy::{
     primitives::{Address, FixedBytes, U256, keccak256},
     sol_types::SolValue,
 };
+use std::fmt;
+
+/// Matching mode for vanity address generation
+#[derive(Clone, Debug)]
+pub enum MatchMode {
+    StartsWith,
+    EndsWith,
+    Contains,
+    LeadingZeros,
+}
+
+impl fmt::Display for MatchMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MatchMode::StartsWith => write!(f, "starts with"),
+            MatchMode::EndsWith => write!(f, "ends with"),
+            MatchMode::Contains => write!(f, "contains"),
+            MatchMode::LeadingZeros => write!(f, "leading zeros"),
+        }
+    }
+}
+
+/// Result of a vanity address search
+#[derive(Debug, Clone)]
+pub struct VanityResult {
+    pub singleton: Option<Address>,
+    pub initializer: String,
+    pub address: Address,
+    pub salt_nonce: U256,
+    pub attempts: u64,
+    pub leading_zeros: u8,
+}
+
+impl VanityResult {
+    pub fn new(
+        singleton: Option<Address>,
+        initializer: String,
+        address: Address,
+        salt_nonce: U256,
+        attempts: u64,
+    ) -> Self {
+        let leading_zeros = count_leading_zeros(&address);
+        Self {
+            singleton,
+            initializer,
+            address,
+            salt_nonce,
+            attempts,
+            leading_zeros,
+        }
+    }
+}
+
+/// Count leading zeros in an address
+pub fn count_leading_zeros(address: &Address) -> u8 {
+    let address_str = format!("{:?}", address);
+    let address_clean = &address_str[2..]; // Remove "0x" prefix
+
+    let mut count = 0u8;
+    for ch in address_clean.chars() {
+        if ch == '0' {
+            count += 1;
+        } else {
+            break;
+        }
+    }
+    count
+}
+
+/// Check if an address matches a pattern based on the mode
+pub fn matches_pattern(
+    address: &Address,
+    pattern: &str,
+    mode: &MatchMode,
+    case_sensitive: bool,
+) -> bool {
+    match mode {
+        MatchMode::LeadingZeros => false, // Handle separately in caller
+        _ => {
+            let address_str = format!("{:?}", address);
+            let address_clean = &address_str[2..]; // Remove "0x" prefix
+
+            let (addr, pat) = if case_sensitive {
+                (address_clean.to_string(), pattern.to_string())
+            } else {
+                (address_clean.to_lowercase(), pattern.to_lowercase())
+            };
+
+            match mode {
+                MatchMode::StartsWith => addr.starts_with(&pat),
+                MatchMode::EndsWith => addr.ends_with(&pat),
+                MatchMode::Contains => addr.contains(&pat),
+                MatchMode::LeadingZeros => unreachable!(),
+            }
+        }
+    }
+}
+
+/// Validate a hex pattern for address matching
+pub fn validate_hex_pattern(pattern: &str) -> Result<(), String> {
+    let pattern_clean = pattern.to_lowercase();
+    if !pattern_clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Pattern must contain only hexadecimal characters (0-9, a-f)".to_string());
+    }
+    Ok(())
+}
+
+/// Generate a random vanity address using CREATE2
+pub fn generate_vanity_address(
+    factory_address: Address,
+    init_code_hash: FixedBytes<32>,
+    initializer: &str,
+    salt_nonce: U256,
+) -> (Address, FixedBytes<32>) {
+    let salt = calculate_salt_from_initializer(initializer, salt_nonce);
+    let address = calculate_create2_address(factory_address, salt, init_code_hash);
+    (address, salt)
+}
+
+/// Format attempts with thousands separators
+pub fn format_attempts(attempts: u64) -> String {
+    let mut result = String::new();
+    let attempts_str = attempts.to_string();
+    let chars: Vec<char> = attempts_str.chars().collect();
+
+    for (i, &ch) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+
+    result
+}
+
+/// Format rate with appropriate units
+pub fn format_rate(rate: f64) -> String {
+    if rate >= 1_000_000.0 {
+        format!("{:.1}M", rate / 1_000_000.0)
+    } else if rate >= 1_000.0 {
+        format!("{:.1}K", rate / 1_000.0)
+    } else {
+        format!("{:.0}", rate)
+    }
+}
 
 /// Parse a U256 from a string (supports decimal, 0x hex, and plain hex)
 pub fn parse_u256(s: &str) -> Result<U256, String> {
@@ -150,4 +295,4 @@ mod tests {
                 .unwrap()
         );
     }
-} 
+}
