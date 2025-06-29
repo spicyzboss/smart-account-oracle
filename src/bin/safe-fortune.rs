@@ -164,20 +164,6 @@ fn worker(
     }
 }
 
-fn ask_user_continue() -> bool {
-    print!("🔍 Continue searching for more leading zeros? (y/N): ");
-    io::stdout().flush().unwrap();
-
-    let mut input = String::new();
-    match io::stdin().read_line(&mut input) {
-        Ok(_) => {
-            let input = input.trim().to_lowercase();
-            matches!(input.as_str(), "y" | "yes")
-        }
-        Err(_) => false,
-    }
-}
-
 fn print_progress(
     counter: Arc<AtomicU64>,
     start_time: Instant,
@@ -284,7 +270,7 @@ fn print_configuration(cli: &Cli, factory_address: Address, init_code_hash: Fixe
 
     match mode {
         MatchMode::LeadingZeros => {
-            println!("Mode:            Leading Zeros (interactive)");
+            println!("Mode:            Leading Zeros (automatic)");
         }
         _ => {
             println!(
@@ -381,36 +367,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Handle results based on mode
     match mode {
         MatchMode::LeadingZeros => {
-            // Interactive leading zeros mode
-            let mut continue_search = true;
+            // Automatic leading zeros mode - keep searching for better results
+            while let Ok(result) = receiver.recv() {
+                let elapsed = start_time.elapsed();
+                let total_attempts = counter.load(Ordering::Relaxed);
 
-            while continue_search {
-                if let Ok(result) = receiver.recv() {
-                    let elapsed = start_time.elapsed();
-                    let total_attempts = counter.load(Ordering::Relaxed);
-
-                    println!(
-                        "\n🎯 NEW RECORD! Found address with {} leading zeros: {:#x}",
-                        result.leading_zeros, result.address
-                    );
-                    print_result_summary(&result, total_attempts, elapsed);
-
-                    // Ask user if they want to continue
-                    continue_search = ask_user_continue();
-
-                    if !continue_search {
-                        stop_flag.store(true, Ordering::Relaxed);
-                        println!("🛑 Stopping search...");
-                        break;
-                    } else {
-                        println!(
-                            "🚀 Continuing search for {} or more leading zeros...\n",
-                            result.leading_zeros + 1
-                        );
-                    }
-                } else {
-                    break;
-                }
+                println!(
+                    "\n🎯 NEW RECORD! Found address with {} leading zeros: {:#x}",
+                    result.leading_zeros, result.address
+                );
+                print_result_summary(&result, total_attempts, elapsed);
+                println!(
+                    "🚀 Continuing search for {} or more leading zeros...\n",
+                    result.leading_zeros + 1
+                );
             }
         }
         _ => {
