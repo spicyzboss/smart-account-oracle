@@ -33,7 +33,7 @@ cargo run --bin safe-fortune -- \
 
 ### Create SafeProxy from SafeProxyFactory
 
-try calling to 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67 (SafeProxyFactory), then send write operation to this signature `createProxyWithNonce(address,bytes,uint256)(address)` with parameter `0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67` (singleton), `$(cat /tmp/initializer.txt)` (initializer params), and salt_nonce from generation step. the vanity smart account should deployed to blockchain.
+try calling to `0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67` (SafeProxyFactory), then send write operation to this signature `createProxyWithNonce(address,bytes,uint256)(address)` with parameter `0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67` (singleton), `$(cat /tmp/initializer.txt)` (initializer params), and salt_nonce from generation step. the vanity smart account should deployed to blockchain.
 
 example foundry send params (not working right now)
 
