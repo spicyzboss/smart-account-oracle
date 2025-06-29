@@ -6,7 +6,6 @@ use smart_account_oracle::{
     MatchMode, VanityResult, count_leading_zeros, format_attempts, format_rate,
     generate_vanity_address, matches_pattern, parse_hex_string, validate_hex_pattern,
 };
-use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::thread;
