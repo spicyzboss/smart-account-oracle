@@ -62,10 +62,6 @@ struct Cli {
     /// Maximum attempts before giving up (0 = unlimited)
     #[arg(long, default_value = "0")]
     max_attempts: u64,
-
-    /// Print progress every N attempts
-    #[arg(long, default_value = "1000000")]
-    progress_interval: u64,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -166,7 +162,6 @@ fn worker(
 fn print_progress(
     counter: Arc<AtomicU64>,
     start_time: Instant,
-    interval: u64,
     max_leading_zeros: Arc<AtomicU8>,
     mode: MatchMode,
 ) {
@@ -213,26 +208,23 @@ fn print_progress(
 }
 
 fn print_result_summary(result: &VanityResult, total_attempts: u64, elapsed: Duration) {
-    println!("============================");
+    let mut output = String::from("============================\n");
+    
     if let Some(singleton) = result.singleton {
-        println!("Singleton:       {:#x}", singleton);
+        output.push_str(&format!("Singleton:       {:#x}\n", singleton));
     }
-    println!("Initializer:     {}", result.initializer);
-    println!(
-        "Salt Nonce:      {:#x} ({})",
-        result.salt_nonce, result.salt_nonce
-    );
+    output.push_str(&format!("Initializer:     {}\n", result.initializer));
+    output.push_str(&format!("Salt Nonce:      {:#x} ({})\n", result.salt_nonce, result.salt_nonce));
     if matches!(result.leading_zeros, n if n > 0) {
-        println!("Leading Zeros:   {}", result.leading_zeros);
+        output.push_str(&format!("Leading Zeros:   {}\n", result.leading_zeros));
     }
-    println!("============================");
-    println!("Worker Attempts: {}", format_attempts(result.attempts));
-    println!("Total Attempts:  {}", format_attempts(total_attempts));
-    println!("Time Elapsed:    {:.2}s", elapsed.as_secs_f64());
-    println!(
-        "Average Rate:    {}/sec",
-        format_rate(total_attempts as f64 / elapsed.as_secs_f64())
-    );
+    output.push_str("============================\n");
+    output.push_str(&format!("Worker Attempts: {}\n", format_attempts(result.attempts)));
+    output.push_str(&format!("Total Attempts:  {}\n", format_attempts(total_attempts)));
+    output.push_str(&format!("Time Elapsed:    {:.2}s\n", elapsed.as_secs_f64()));
+    output.push_str(&format!("Average Rate:    {}/sec\n", format_rate(total_attempts as f64 / elapsed.as_secs_f64())));
+    
+    print!("{}", output);
 }
 
 fn validate_inputs(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -328,7 +320,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         print_progress(
             progress_counter,
             start_time,
-            cli.progress_interval,
             progress_max_zeros,
             progress_mode,
         );
