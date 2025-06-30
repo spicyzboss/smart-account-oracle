@@ -170,21 +170,21 @@ fn print_progress(
     max_leading_zeros: Arc<AtomicU8>,
     mode: MatchMode,
 ) {
+    use std::io::{self, Write};
     let mut last_count = 0u64;
 
     loop {
-        thread::sleep(Duration::from_secs(1));
         let current_count = counter.load(Ordering::Relaxed);
         let elapsed = start_time.elapsed().as_secs_f64();
-        let avg_rate = current_count as f64 / elapsed;
+        let avg_rate = if elapsed > 0.0 { current_count as f64 / elapsed } else { 0.0 };
         let current_rate = (current_count - last_count) as f64;
 
-        if current_count > 0 && current_count % interval == 0 {
+        if current_count > 0 {
             match mode {
                 MatchMode::LeadingZeros => {
                     let current_max = max_leading_zeros.load(Ordering::Relaxed);
-                    println!(
-                        "⚡ Attempts: {} | Rate: {}/s (avg: {}/s) | Max Leading Zeros: {} | Elapsed: {:.1}s",
+                    print!(
+                        "\r⚡ Attempts: {} | Rate: {}/s (avg: {}/s) | Max Leading Zeros: {} | Elapsed: {:.1}s",
                         format_attempts(current_count),
                         format_rate(current_rate),
                         format_rate(avg_rate),
@@ -193,8 +193,8 @@ fn print_progress(
                     );
                 }
                 _ => {
-                    println!(
-                        "⚡ Attempts: {} | Rate: {}/s (avg: {}/s) | Elapsed: {:.1}s",
+                    print!(
+                        "\r⚡ Attempts: {} | Rate: {}/s (avg: {}/s) | Elapsed: {:.1}s",
                         format_attempts(current_count),
                         format_rate(current_rate),
                         format_rate(avg_rate),
@@ -202,9 +202,13 @@ fn print_progress(
                     );
                 }
             }
+            io::stdout().flush().unwrap();
         }
 
         last_count = current_count;
+        
+        // Update every second
+        thread::sleep(Duration::from_secs(1));
     }
 }
 
