@@ -99,16 +99,16 @@ fn worker(
     counter: Arc<AtomicU64>,
     singleton: Option<Address>,
     max_leading_zeros: Arc<AtomicU8>,
+    starting_salt_nonce: U256,
 ) {
-    let mut rng = rand::thread_rng();
+    let mut salt_nonce = starting_salt_nonce;
     let mut attempts = 0u64;
 
     while !stop_flag.load(Ordering::Relaxed) {
         attempts += 1;
         counter.fetch_add(1, Ordering::Relaxed);
 
-        // Generate random salt nonce and address
-        let salt_nonce = U256::from_be_bytes(rng.r#gen::<[u8; 32]>());
+        // Generate address with current salt nonce
         let (address, _salt) =
             generate_vanity_address(factory_address, init_code_hash, &initializer, salt_nonce);
 
@@ -156,6 +156,9 @@ fn worker(
                 break; // Found a match, stop this worker (except for leading zeros mode)
             }
         }
+
+        // Increment salt nonce for next iteration
+        salt_nonce = salt_nonce.wrapping_add(U256::from(1));
     }
 }
 
@@ -179,7 +182,7 @@ fn print_progress(
                 MatchMode::LeadingZeros => {
                     let current_max = max_leading_zeros.load(Ordering::Relaxed);
                     print!(
-                        "\r⚡ Attempts: {} | Rate: {}/s (avg: {}/s) | Max Leading Zeros: {} | Elapsed: {:.1}s",
+                        "\r⚡ Attempts: {} | Rate: {}/s (avg: {}/s) | Max Leading Zeros: {} | Elapsed: {:.0}s",
                         format_attempts(current_count),
                         format_rate(current_rate),
                         format_rate(avg_rate),
@@ -189,7 +192,7 @@ fn print_progress(
                 }
                 _ => {
                     print!(
-                        "\r⚡ Attempts: {} | Rate: {}/s (avg: {}/s) | Elapsed: {:.1}s",
+                        "\r⚡ Attempts: {} | Rate: {}/s (avg: {}/s) | Elapsed: {:.0}s",
                         format_attempts(current_count),
                         format_rate(current_rate),
                         format_rate(avg_rate),
@@ -208,21 +211,21 @@ fn print_progress(
 }
 
 fn print_result_summary(result: &VanityResult, total_attempts: u64, elapsed: Duration) {
-    let mut output = String::from("============================\n");
-    
+    let mut output = String::from("\n===========================================================\n");
+
+    output.push_str(&format!("Address:         {:#x}\n", result.address));
     if let Some(singleton) = result.singleton {
         output.push_str(&format!("Singleton:       {:#x}\n", singleton));
     }
     output.push_str(&format!("Initializer:     {}\n", result.initializer));
     output.push_str(&format!("Salt Nonce:      {:#x} ({})\n", result.salt_nonce, result.salt_nonce));
-    if matches!(result.leading_zeros, n if n > 0) {
-        output.push_str(&format!("Leading Zeros:   {}\n", result.leading_zeros));
-    }
-    output.push_str("============================\n");
+    output.push_str("-----------------------------------------------------------\n");
+    output.push_str(&format!("Leading Zeros:   {}\n", result.leading_zeros));
     output.push_str(&format!("Worker Attempts: {}\n", format_attempts(result.attempts)));
     output.push_str(&format!("Total Attempts:  {}\n", format_attempts(total_attempts)));
-    output.push_str(&format!("Time Elapsed:    {:.2}s\n", elapsed.as_secs_f64()));
+    output.push_str(&format!("Time Elapsed:    {:.0}s\n", elapsed.as_secs_f64()));
     output.push_str(&format!("Average Rate:    {}/sec\n", format_rate(total_attempts as f64 / elapsed.as_secs_f64())));
+    output.push_str("===========================================================\n");
     
     print!("{}", output);
 }
@@ -325,9 +328,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     });
 
+    // Generate initial random salt nonce and distribute workers across the space
+    let mut rng = rand::thread_rng();
+    let base_salt_nonce = U256::from_be_bytes(rng.r#gen::<[u8; 32]>());
+    let worker_increment = U256::MAX / U256::from(cli.jobs as u64);
+
     // Start worker threads
     let workers: Vec<_> = (0..cli.jobs)
-        .map(|_| {
+        .map(|worker_id| {
             let sender = sender.clone();
             let stop_flag = Arc::clone(&stop_flag);
             let counter = Arc::clone(&counter);
@@ -336,6 +344,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pattern = cli.pattern.clone();
             let mode = mode.clone();
             let singleton = cli.singleton.clone().map(|s| s.parse::<Address>().unwrap());
+            
+            // Each worker starts from a different offset to avoid duplicates
+            let starting_salt_nonce = base_salt_nonce.wrapping_add(
+                worker_increment.wrapping_mul(U256::from(worker_id as u64))
+            );
 
             thread::spawn(move || {
                 worker(
@@ -350,6 +363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     counter,
                     singleton,
                     max_leading_zeros,
+                    starting_salt_nonce,
                 );
             })
         })
@@ -366,15 +380,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let elapsed = start_time.elapsed();
                 let total_attempts = counter.load(Ordering::Relaxed);
 
-                println!(
-                    "\n🎯 NEW RECORD! Found address with {} leading zeros: {:#x}",
-                    result.leading_zeros, result.address
-                );
                 print_result_summary(&result, total_attempts, elapsed);
-                println!(
-                    "🚀 Continuing search for {} or more leading zeros...\n",
-                    result.leading_zeros + 1
-                );
             }
         }
         _ => {
