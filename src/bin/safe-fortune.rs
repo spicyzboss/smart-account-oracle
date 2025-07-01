@@ -3,8 +3,8 @@ use clap::{Parser, ValueEnum};
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use rand::Rng;
 use smart_account_oracle::{
-    MatchMode, VanityResult, count_leading_zeros, format_attempts, format_rate,
-    generate_vanity_address, matches_pattern, parse_hex_string, validate_hex_pattern,
+    MatchMode, VanityResult, format_attempts, format_rate,
+    parse_hex_string, validate_hex_pattern,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
@@ -91,7 +91,8 @@ fn worker(
     factory_address: Address,
     init_code_hash: FixedBytes<32>,
     initializer: String,
-    pattern: Option<String>,
+    initializer_hash: FixedBytes<32>, // Pre-computed for performance
+    pattern_nibbles: Option<Vec<u8>>, // Pre-parsed pattern
     mode: MatchMode,
     case_sensitive: bool,
     sender: Sender<VanityResult>,
@@ -100,65 +101,90 @@ fn worker(
     singleton: Option<Address>,
     max_leading_zeros: Arc<AtomicU8>,
     starting_salt_nonce: U256,
+    batch_size: u64, // Process multiple iterations before checking stop_flag
 ) {
     let mut salt_nonce = starting_salt_nonce;
     let mut attempts = 0u64;
+    let mut local_counter = 0u64;
+    let mut buffer = [0u8; 85]; // Pre-allocated buffer for CREATE2 calculation
 
     while !stop_flag.load(Ordering::Relaxed) {
-        attempts += 1;
-        counter.fetch_add(1, Ordering::Relaxed);
+        // Process in batches to reduce atomic operation overhead
+        for _ in 0..batch_size {
+            attempts += 1;
+            local_counter += 1;
 
-        // Generate address with current salt nonce
-        let (address, _salt) =
-            generate_vanity_address(factory_address, init_code_hash, &initializer, salt_nonce);
-
-        let should_report = match mode {
-            MatchMode::LeadingZeros => {
-                let leading_zeros = count_leading_zeros(&address);
-                let current_max = max_leading_zeros.load(Ordering::Relaxed);
-
-                if leading_zeros > current_max {
-                    max_leading_zeros
-                        .compare_exchange_weak(
-                            current_max,
-                            leading_zeros,
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        )
-                        .is_ok()
-                } else {
-                    false
-                }
-            }
-            _ => {
-                if let Some(ref pattern) = pattern {
-                    matches_pattern(&address, pattern, &mode, case_sensitive)
-                } else {
-                    false
-                }
-            }
-        };
-
-        if should_report {
-            let result = VanityResult::new(
-                singleton,
-                initializer.clone(),
-                address,
+            // Generate address with current salt nonce using fast method
+            let (address, _salt) = smart_account_oracle::generate_vanity_address_fast(
+                factory_address,
+                init_code_hash,
+                initializer_hash,
                 salt_nonce,
-                attempts,
+                &mut buffer,
             );
 
-            if sender.send(result).is_err() {
-                break; // Main thread disconnected
+            let should_report = match mode {
+                MatchMode::LeadingZeros => {
+                    let leading_zeros = smart_account_oracle::count_leading_zeros_fast(&address);
+                    let current_max = max_leading_zeros.load(Ordering::Relaxed);
+
+                    if leading_zeros > current_max {
+                        max_leading_zeros
+                            .compare_exchange_weak(
+                                current_max,
+                                leading_zeros,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            )
+                            .is_ok()
+                    } else {
+                        false
+                    }
+                }
+                _ => {
+                    if let Some(ref pattern_bytes) = pattern_nibbles {
+                        smart_account_oracle::matches_pattern_fast(&address, pattern_bytes, &mode, case_sensitive)
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if should_report {
+                let result = VanityResult::new(
+                    singleton,
+                    initializer.clone(),
+                    address,
+                    salt_nonce,
+                    attempts,
+                );
+
+                if sender.send(result).is_err() {
+                    return; // Main thread disconnected
+                }
+
+                if !matches!(mode, MatchMode::LeadingZeros) {
+                    return; // Found a match, stop this worker (except for leading zeros mode)
+                }
             }
 
-            if !matches!(mode, MatchMode::LeadingZeros) {
-                break; // Found a match, stop this worker (except for leading zeros mode)
+            // Increment salt nonce for next iteration
+            salt_nonce = salt_nonce.wrapping_add(U256::from(1));
+
+            // Early exit check within batch
+            if should_report && !matches!(mode, MatchMode::LeadingZeros) {
+                break;
             }
         }
 
-        // Increment salt nonce for next iteration
-        salt_nonce = salt_nonce.wrapping_add(U256::from(1));
+        // Update global counter in batches to reduce contention
+        counter.fetch_add(local_counter, Ordering::Relaxed);
+        local_counter = 0;
+    }
+
+    // Update any remaining local counter
+    if local_counter > 0 {
+        counter.fetch_add(local_counter, Ordering::Relaxed);
     }
 }
 
@@ -205,8 +231,8 @@ fn print_progress(
 
         last_count = current_count;
         
-        // Update every second
-        thread::sleep(Duration::from_secs(1));
+        // Update every 2 seconds to reduce overhead
+        thread::sleep(Duration::from_secs(2));
     }
 }
 
@@ -328,6 +354,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     });
 
+    // Pre-compute pattern nibbles and initializer hash for performance
+    let pattern_nibbles = if let Some(ref pattern) = cli.pattern {
+        Some(smart_account_oracle::parse_pattern_to_nibbles(pattern)?)
+    } else {
+        None
+    };
+    let initializer_hash = smart_account_oracle::precompute_initializer_hash(&cli.initializer)?;
+
     // Generate initial random salt nonce and distribute workers across the space
     let mut rng = rand::thread_rng();
     let base_salt_nonce = U256::from_be_bytes(rng.r#gen::<[u8; 32]>());
@@ -341,7 +375,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let counter = Arc::clone(&counter);
             let max_leading_zeros = Arc::clone(&max_leading_zeros);
             let initializer = cli.initializer.clone();
-            let pattern = cli.pattern.clone();
+            let pattern_nibbles = pattern_nibbles.clone();
             let mode = mode.clone();
             let singleton = cli.singleton.clone().map(|s| s.parse::<Address>().unwrap());
             
@@ -355,7 +389,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     factory_address,
                     init_code_hash,
                     initializer,
-                    pattern,
+                    initializer_hash,
+                    pattern_nibbles,
                     mode,
                     cli.case_sensitive,
                     sender,
@@ -364,6 +399,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     singleton,
                     max_leading_zeros,
                     starting_salt_nonce,
+                    10000, // Large batch size for reduced atomic operations
                 );
             })
         })

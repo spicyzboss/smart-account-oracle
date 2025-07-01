@@ -72,6 +72,24 @@ pub fn count_leading_zeros(address: &Address) -> u8 {
     count
 }
 
+/// Fast count of leading zeros working directly with address bytes
+pub fn count_leading_zeros_fast(address: &Address) -> u8 {
+    let bytes = address.as_slice();
+    let mut count = 0u8;
+    
+    for &byte in bytes {
+        if byte == 0 {
+            count += 2; // Each zero byte = 2 hex zeros
+        } else if byte < 0x10 {
+            count += 1; // High nibble is zero
+            break;
+        } else {
+            break;
+        }
+    }
+    count
+}
+
 /// Check if an address matches a pattern based on the mode
 pub fn matches_pattern(
     address: &Address,
@@ -101,6 +119,173 @@ pub fn matches_pattern(
     }
 }
 
+/// Fast pattern matching working directly with address bytes
+pub fn matches_pattern_fast(
+    address: &Address,
+    pattern_bytes: &[u8],
+    mode: &MatchMode,
+    case_sensitive: bool,
+) -> bool {
+    let addr_bytes = address.as_slice();
+    
+    match mode {
+        MatchMode::LeadingZeros => false, // Handle separately
+        MatchMode::StartsWith => {
+            if case_sensitive {
+                starts_with_bytes(addr_bytes, pattern_bytes)
+            } else {
+                starts_with_bytes_case_insensitive(addr_bytes, pattern_bytes)
+            }
+        }
+        MatchMode::EndsWith => {
+            if case_sensitive {
+                ends_with_bytes(addr_bytes, pattern_bytes)
+            } else {
+                ends_with_bytes_case_insensitive(addr_bytes, pattern_bytes)
+            }
+        }
+        MatchMode::Contains => {
+            if case_sensitive {
+                contains_bytes(addr_bytes, pattern_bytes)
+            } else {
+                contains_bytes_case_insensitive(addr_bytes, pattern_bytes)
+            }
+        }
+    }
+}
+
+fn starts_with_bytes(addr: &[u8], pattern: &[u8]) -> bool {
+    if pattern.len() > addr.len() * 2 {
+        return false;
+    }
+    
+    for (i, &pattern_byte) in pattern.iter().enumerate() {
+        let addr_idx = i / 2;
+        let addr_byte = addr[addr_idx];
+        let addr_nibble = if i % 2 == 0 { addr_byte >> 4 } else { addr_byte & 0x0f };
+        
+        if pattern_byte != addr_nibble {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with_bytes_case_insensitive(addr: &[u8], pattern: &[u8]) -> bool {
+    if pattern.len() > addr.len() * 2 {
+        return false;
+    }
+    
+    for (i, &pattern_byte) in pattern.iter().enumerate() {
+        let addr_idx = i / 2;
+        let addr_byte = addr[addr_idx];
+        let addr_nibble = if i % 2 == 0 { addr_byte >> 4 } else { addr_byte & 0x0f };
+        
+        // Convert both to lowercase for comparison
+        let pattern_lower = if pattern_byte >= 10 { pattern_byte - 10 + b'a' } else { pattern_byte + b'0' };
+        let addr_lower = if addr_nibble >= 10 { addr_nibble - 10 + b'a' } else { addr_nibble + b'0' };
+        
+        if pattern_lower != addr_lower {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends_with_bytes(addr: &[u8], pattern: &[u8]) -> bool {
+    if pattern.len() > addr.len() * 2 {
+        return false;
+    }
+    
+    let start_pos = addr.len() * 2 - pattern.len();
+    for (i, &pattern_byte) in pattern.iter().enumerate() {
+        let pos = start_pos + i;
+        let addr_idx = pos / 2;
+        let addr_byte = addr[addr_idx];
+        let addr_nibble = if pos % 2 == 0 { addr_byte >> 4 } else { addr_byte & 0x0f };
+        
+        if pattern_byte != addr_nibble {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends_with_bytes_case_insensitive(addr: &[u8], pattern: &[u8]) -> bool {
+    if pattern.len() > addr.len() * 2 {
+        return false;
+    }
+    
+    let start_pos = addr.len() * 2 - pattern.len();
+    for (i, &pattern_byte) in pattern.iter().enumerate() {
+        let pos = start_pos + i;
+        let addr_idx = pos / 2;
+        let addr_byte = addr[addr_idx];
+        let addr_nibble = if pos % 2 == 0 { addr_byte >> 4 } else { addr_byte & 0x0f };
+        
+        let pattern_lower = if pattern_byte >= 10 { pattern_byte - 10 + b'a' } else { pattern_byte + b'0' };
+        let addr_lower = if addr_nibble >= 10 { addr_nibble - 10 + b'a' } else { addr_nibble + b'0' };
+        
+        if pattern_lower != addr_lower {
+            return false;
+        }
+    }
+    true
+}
+
+fn contains_bytes(addr: &[u8], pattern: &[u8]) -> bool {
+    if pattern.len() > addr.len() * 2 {
+        return false;
+    }
+    
+    for start in 0..=(addr.len() * 2 - pattern.len()) {
+        let mut matches = true;
+        for (i, &pattern_byte) in pattern.iter().enumerate() {
+            let pos = start + i;
+            let addr_idx = pos / 2;
+            let addr_byte = addr[addr_idx];
+            let addr_nibble = if pos % 2 == 0 { addr_byte >> 4 } else { addr_byte & 0x0f };
+            
+            if pattern_byte != addr_nibble {
+                matches = false;
+                break;
+            }
+        }
+        if matches {
+            return true;
+        }
+    }
+    false
+}
+
+fn contains_bytes_case_insensitive(addr: &[u8], pattern: &[u8]) -> bool {
+    if pattern.len() > addr.len() * 2 {
+        return false;
+    }
+    
+    for start in 0..=(addr.len() * 2 - pattern.len()) {
+        let mut matches = true;
+        for (i, &pattern_byte) in pattern.iter().enumerate() {
+            let pos = start + i;
+            let addr_idx = pos / 2;
+            let addr_byte = addr[addr_idx];
+            let addr_nibble = if pos % 2 == 0 { addr_byte >> 4 } else { addr_byte & 0x0f };
+            
+            let pattern_lower = if pattern_byte >= 10 { pattern_byte - 10 + b'a' } else { pattern_byte + b'0' };
+            let addr_lower = if addr_nibble >= 10 { addr_nibble - 10 + b'a' } else { addr_nibble + b'0' };
+            
+            if pattern_lower != addr_lower {
+                matches = false;
+                break;
+            }
+        }
+        if matches {
+            return true;
+        }
+    }
+    false
+}
+
 /// Validate a hex pattern for address matching
 pub fn validate_hex_pattern(pattern: &str) -> Result<(), String> {
     let pattern_clean = pattern.to_lowercase();
@@ -108,6 +293,25 @@ pub fn validate_hex_pattern(pattern: &str) -> Result<(), String> {
         return Err("Pattern must contain only hexadecimal characters (0-9, a-f)".to_string());
     }
     Ok(())
+}
+
+/// Convert hex pattern string to byte nibbles for fast matching
+pub fn parse_pattern_to_nibbles(pattern: &str) -> Result<Vec<u8>, String> {
+    let pattern_clean = pattern.to_lowercase();
+    if !pattern_clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Pattern must contain only hexadecimal characters (0-9, a-f)".to_string());
+    }
+    
+    let mut nibbles = Vec::with_capacity(pattern_clean.len());
+    for ch in pattern_clean.chars() {
+        let nibble = match ch {
+            '0'..='9' => ch as u8 - b'0',
+            'a'..='f' => ch as u8 - b'a' + 10,
+            _ => return Err("Invalid hex character".to_string()),
+        };
+        nibbles.push(nibble);
+    }
+    Ok(nibbles)
 }
 
 /// Generate a random vanity address using CREATE2
@@ -189,6 +393,24 @@ pub fn calculate_create2_address(
     Address::from_slice(&hash[12..])
 }
 
+/// Optimized CREATE2 address calculation that reuses buffer
+pub fn calculate_create2_address_fast(
+    factory_address: Address,
+    salt: FixedBytes<32>,
+    init_code_hash: FixedBytes<32>,
+    buffer: &mut [u8; 85], // Pre-allocated buffer
+) -> Address {
+    // Prepare the data for hashing: 0xff + factory_address + salt + init_code_hash
+    buffer[0] = 0xff;
+    buffer[1..21].copy_from_slice(factory_address.as_slice());
+    buffer[21..53].copy_from_slice(salt.as_slice());
+    buffer[53..85].copy_from_slice(init_code_hash.as_slice());
+
+    // Hash the data and take the last 20 bytes as the address
+    let hash = keccak256(buffer);
+    Address::from_slice(&hash[12..])
+}
+
 /// Calculate salt from initializer and salt nonce using the formula:
 /// keccak256(abi.encodePacked(keccak256(initializer), saltNonce))
 pub fn calculate_salt_from_initializer(initializer: &str, salt_nonce: U256) -> FixedBytes<32> {
@@ -201,6 +423,21 @@ pub fn calculate_salt_from_initializer(initializer: &str, salt_nonce: U256) -> F
     // Hash the initializer
     let initializer_hash = keccak256(&initializer_bytes);
 
+    // Convert salt_nonce to big-endian bytes (32 bytes for U256)
+    let salt_nonce_bytes = salt_nonce.to_be_bytes::<32>();
+
+    // Concatenate: initializer_hash (32 bytes) + salt_nonce_bytes (32 bytes)
+    let packed_data = [initializer_hash.to_vec(), salt_nonce_bytes.to_vec()].abi_encode_packed();
+
+    // Hash the packed data
+    keccak256(&packed_data)
+}
+
+/// Fast salt calculation using pre-computed initializer hash
+pub fn calculate_salt_from_initializer_hash_fast(
+    initializer_hash: FixedBytes<32>,
+    salt_nonce: U256,
+) -> FixedBytes<32> {
     // Convert salt_nonce to big-endian bytes (32 bytes for U256)
     let salt_nonce_bytes = salt_nonce.to_be_bytes::<32>();
 
@@ -241,6 +478,25 @@ pub fn parse_hex_bytes(hex_str: &str, expected_len: usize) -> Result<Vec<u8>, St
     }
 
     Ok(bytes)
+}
+
+/// Pre-compute initializer hash for performance
+pub fn precompute_initializer_hash(initializer: &str) -> Result<FixedBytes<32>, String> {
+    let initializer_bytes = parse_hex_string(initializer)?;
+    Ok(keccak256(&initializer_bytes))
+}
+
+/// Optimized vanity address generation that minimizes allocations
+pub fn generate_vanity_address_fast(
+    factory_address: Address,
+    init_code_hash: FixedBytes<32>,
+    initializer_hash: FixedBytes<32>, // Pre-computed
+    salt_nonce: U256,
+    buffer: &mut [u8; 85], // Reused buffer
+) -> (Address, FixedBytes<32>) {
+    let salt = calculate_salt_from_initializer_hash_fast(initializer_hash, salt_nonce);
+    let address = calculate_create2_address_fast(factory_address, salt, init_code_hash, buffer);
+    (address, salt)
 }
 
 #[cfg(test)]
